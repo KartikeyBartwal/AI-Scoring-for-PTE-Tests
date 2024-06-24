@@ -2,4 +2,4 @@ uvicorn
 fastapi
 pydantic
 aiofiles
-patoo
+patool
