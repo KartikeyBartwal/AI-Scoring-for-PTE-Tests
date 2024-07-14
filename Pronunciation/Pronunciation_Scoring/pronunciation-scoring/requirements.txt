@@ -1,0 +1,8 @@
+requests
+pyarrow
+librosa
+torch
+transformers
+fastapi
+starlette
+soundfile
