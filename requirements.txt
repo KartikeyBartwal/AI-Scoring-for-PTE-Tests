@@ -1,0 +1,12 @@
+requests
+pyarrow
+librosa
+torch
+transformers
+fastapi
+starlette
+soundfile
+streamlit
+nltk
+sentence_transformers
+uvicorn
