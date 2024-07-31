@@ -97,7 +97,9 @@ print("Downloading fluency model...")
 fluency_model = DistilBertForRegression.from_pretrained("Kartikeyssj2/Fluency_Scoring_V2")
 print("Download completed.")
 
-
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+pronunciation_model.to(device)
+fluency_model.to(device)
 
 ''''''''''''''''''''' LOADING THE BIASING MODELS '''''''''''''''
 
@@ -242,7 +244,8 @@ def transcribe_audio(audio_path):
         # Simple resampling (less accurate but doesn't require librosa)
         audio = np.array(audio[::int(sample_rate/16000)])
     
-    input_values = pronunciation_tokenizer(audio, return_tensors = "pt").input_values
+    input_values = pronunciation_tokenizer(audio, return_tensors="pt").input_values.to(device)
+
 
     logits = pronunciation_model(input_values).logits
     
@@ -254,10 +257,6 @@ def transcribe_audio(audio_path):
 
 app = FastAPI()
 
-@app.get("/")
-async def read_root():
-    return "AI Speech Scoring Endpoints"
-    
 @app.post("/speech_scoring/")
 async def speech_scoring(speech_topic: str, audio_file: UploadFile = File(...)):
     
