@@ -254,8 +254,11 @@ def transcribe_audio(audio_path):
 
 app = FastAPI()
 
-@app.post("/unscripted_speech_scoring/")
-@app.post("/unscripted_speech_scoring/")
+@app.get("/")
+async def read_root():
+    return "AI Speech Scoring Endpoints"
+    
+@app.post("/speech_scoring/")
 async def speech_scoring(speech_topic: str, audio_file: UploadFile = File(...)):
     
     ''''''''''''''''''' Get THE RAW TRANSCRIPTION '''''''''''''''''''
