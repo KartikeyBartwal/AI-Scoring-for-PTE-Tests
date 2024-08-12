@@ -42,7 +42,7 @@ You can check the status of the API with this:
 ```bash
 sudo systemctl status fastapi
 ```
-Note that this status command doesn't reload, so you need to re run this to see the updates.
+Note that this status command doesn't reload, so you need to re run this to see the log updates.
 
 # Configuration of the API:
 
