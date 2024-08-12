@@ -31,7 +31,7 @@ sudo systemctl restart nginx
 
 B) Next, you need to switch on the API process. To ensure the API stays awake all the time when the machine is active, I made the fastapi as a system_d process. This means you won't have to worry for it to crash anytime.
 
-All the configuration has been done. Just run the following command:
+All the nginx configuration has been done. Just run the following command:
 
 ```bash
 sudo systemctl start fastapi
