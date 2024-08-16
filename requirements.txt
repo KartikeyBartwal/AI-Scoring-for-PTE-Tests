@@ -1,5 +1,13 @@
-uvicorn
+requests
+pyarrow
+librosa
+torch
+transformers
 fastapi
-pydantic
-aiofiles
-patool
+starlette
+soundfile
+streamlit
+nltk
+sentence_transformers
+uvicorn
+python-multipart
