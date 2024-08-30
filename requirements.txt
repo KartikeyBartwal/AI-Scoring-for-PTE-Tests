@@ -11,3 +11,5 @@ nltk
 sentence_transformers
 uvicorn
 python-multipart
+pydub
+textblob
