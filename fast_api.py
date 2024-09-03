@@ -126,11 +126,6 @@ print(linreg_fluency)
 print(linreg_pronunciation)
 print(content_relevance_model)
 
-# BEDI'S TALK
-print(linreg_fluency.predict(np.array([[83.33 , 45.23 , 23.33]])))
-
-print(linreg_pronunciation.predict(np.array([[83.33 , 45.23 , 23.33]])))
-
 
 import requests
 from PIL import Image
@@ -147,7 +142,7 @@ image_captioning_model = BlipForConditionalGeneration.from_pretrained("noamrot/F
 
 ''''''''''''''''''' FUNCTIONS FOR PREPROCESSING '''''''''''''''
 
-def count_misspelled_words(text):
+async def count_misspelled_words(text):
     nltk_data_dir = os.path.join(os.getcwd(), 'nltk_data')
     nltk.data.path.append(nltk_data_dir)
 
@@ -161,7 +156,7 @@ def count_misspelled_words(text):
     return f"{(incorrect_count / total_words * 100):.2f}"
 
 
-def get_fluency_score(transcription):
+async def get_fluency_score(transcription):
     tokenized_text = fluency_tokenizer(transcription, return_tensors="pt")
     with torch.no_grad():
         output = fluency_model(**tokenized_text)
@@ -179,7 +174,7 @@ def download_word_list():
 english_words = download_word_list()
 
 # Function to count correctly spelled words in text
-def count_spelled_words(text, word_list):
+async def count_spelled_words(text, word_list):
     print("Counting spelled words...")
     # Split the text into words
     words = re.findall(r'\b\w+\b', text.lower())
@@ -191,12 +186,12 @@ def count_spelled_words(text, word_list):
     return incorrect, correct
 
 # Function to apply spell check to an item (assuming it's a dictionary)
-def apply_spell_check(item, word_list):
+async def apply_spell_check(item, word_list):
     print("Applying spell check...")
     if isinstance(item, dict):
         # This is a single item
         text = item['transcription']
-        incorrect, correct = count_spelled_words(text, word_list)
+        incorrect, correct = await count_spelled_words(text, word_list)
         item['incorrect_words'] = incorrect
         item['correct_words'] = correct
         print("Spell check applied to single item.")
@@ -215,29 +210,22 @@ def apply_spell_check(item, word_list):
         return item
 
 
-def get_pronunciation_score(transcription):
+async def get_pronunciation_and_fluency_scores(transcription):
 
-    incorrect, correct = count_spelled_words(transcription, english_words)
+    count_spelled_words_response, fluency_score = await asyncio.gather(
+        count_spelled_words(transcription, english_words),
+        get_fluency_score(transcription)
+    )
 
-    # Calculate pronunciation score
-    fraction = correct / (incorrect + correct)
-    score = round(fraction * 100, 2)
+    incorrect = count_spelled_words_response[ 0 ]
+    correct = count_spelled_words_response[ 1 ]
 
-    return {
-        "transcription": transcription,
-        "pronunciation_score": score
-    }
-
-def get_pronunciation_and_fluency_scores(transcription):
-
-    incorrect, correct = count_spelled_words(transcription, english_words)
 
     # Calculate pronunciation score
     fraction = correct / (incorrect + correct)
     pronunciation_score = round(fraction * 100, 2)
 
     # Calculate fluency score
-    fluency_score = get_fluency_score(transcription)
 
     return {
         "transcription": transcription,
@@ -273,6 +261,25 @@ def transcribe_audio(audio_path):
     return transcription.lower()
 
 
+
+async def content_score( text1: str, text2 : str ):
+    essay_embedding = content_relevance_model.encode( text1 )
+
+    summarization_embedding = content_relevance_model.encode( text2 )
+
+    relevance_score = float(util.dot_score( essay_embedding, summarization_embedding).cpu()[0][0]) * 100
+
+    if(relevance_score >= 40):
+        relevance_score = relevance_score + 30
+
+    relevance_score = min( relevance_score , 100 )
+
+    relevance_score = max( 0 , relevance_score )
+
+    return relevance_score
+
+
+
 app = FastAPI()
 
 @app.post("/pronunciation_fluency_content_scoring/")
@@ -291,34 +298,28 @@ async def speech_scoring(speech_topic: str = Form(), audio_file: UploadFile = Fi
     # Clean up the temporary file
     os.remove(temp_file_path)
 
+    print("transcription: " , transcription , "\n\n")
+
     ''''''''''''''''''' GET THE PRONUNCIATION AND FLUENCY SCORING '''''''''''''
-    result = get_pronunciation_and_fluency_scores(transcription)
-
-    print("*" * 50)
-
-    print("transcription:" , transcription)
-
-    print("*" * 50)
-
     ''''''''''''''''''' GET THE CONTENT AND RELEVANCE SCORING '''''''''''''
-    topic_text_embeddings = content_relevance_model.encode(speech_topic)
-    transcription_text_embeddings = content_relevance_model.encode(transcription)
-    relevance_scores = float(util.dot_score(topic_text_embeddings, transcription_text_embeddings).cpu()[0][0]) * 100
 
-    print("relevance scores:" , relevance_scores)
+    result, relevance_scores, incorrect_words_percentage = await asyncio.gather(
+
+            get_pronunciation_and_fluency_scores(transcription),
+            content_score(speech_topic, transcription),
+            count_misspelled_words(transcription)
+
+    )
+
 
     ''''''''''''''''''' PASS THE RAW OUTPUTS TO THE BIASING MODEL '''''''''''''
 
     base_pronunciation_score = result["pronunciation_score"]
     base_fluency_score = result["fluency_score"]
-    incorrect_words_percentage = count_misspelled_words(transcription)
 
     base_pronunciation_score = float(base_pronunciation_score)
     base_fluency_score = float(base_fluency_score)
     incorrect_words_percentage = float(incorrect_words_percentage)
-
-    if(relevance_scores >= 40):
-        relevance_scores = relevance_scores + 30
 
     print("Base Pronunciation Score:", base_pronunciation_score)
     print("Base fluency Score:", base_fluency_score)
@@ -365,7 +366,7 @@ def Get_Captions(context: str , image_captioning_model, image_file):
 
 
 @app.post("/image_description_scoring/")
-async def speech_scoring( context : str = Form() ,  audio_file: UploadFile = File(...) ,image_file: UploadFile = File(...) ):
+async def image_description_scoring( context : str = Form() ,  audio_file: UploadFile = File(...) ,image_file: UploadFile = File(...) ):
 
 
     ''''''''''''''''''' Get THE RAW TRANSCRIPTION '''''''''''''''''''
@@ -449,12 +450,14 @@ async def is_valid_summary_format(summary: str) -> bool:
 
     # CHECK IF THE SUMMARY CONSISTS ONLY OF VERY SHORT SENTENCES
     sentences = re.split(r'[.!?]', summary)
-    short_sentences = sum(len(sentence.split()) <= 2 for sentence in sentences if sentence.strip())
+    short_sentences = sum(len(sentence.split()) <= 70 for sentence in sentences if sentence.strip())
+
+    print(" Short Sentences: " , short_sentences )
 
     # CONSIDER IT A VALID FORMAT IF MORE THAN HALF OF THE SENTENCES ARE SHORT
     return short_sentences >= len(sentences) / 2
 
-async def form_score(summary: str) -> int:
+async def form_score_summary(summary: str) -> float:
     # CONVERT THE SUMMARY TO UPPERCASE
     summary_upper = summary.upper()
 
@@ -467,13 +470,27 @@ async def form_score(summary: str) -> int:
     # CHECK IF THE SUMMARY FORMAT IS VALID
     valid_format = is_valid_summary_format(summary)
 
+    print("\n\n word count: ", word_count, " valid_format: ", valid_format)
+
     # CALCULATE SCORE BASED ON WORD COUNT AND FORMAT
-    if 50 <= word_count <= 70 and valid_format:
-        return 100  # BEST SCORE
-    elif (40 <= word_count <= 49 or 71 <= word_count <= 100) and valid_format:
-        return 50   # AVERAGE SCORE
+    if valid_format:
+        if 45 <= word_count <= 75:
+            if word_count < 50:
+                score = 50 + (word_count - 45) * (50 / 5)  # Gradual increase from 50
+            elif word_count <= 75:
+                score = 100  # Best score range
+            else:
+                score = 100 - (word_count - 70) * (50 / 5)  # Gradual decrease from 100
+        else:
+            score = 0  # Worst score if word count is out of acceptable range
     else:
-        return 0    # WORST SCORE
+        score = 0  # Worst score if format is invalid
+
+    # CLAMP SCORE BETWEEN 0 AND 100
+
+    score = float( score )
+
+    return max(0.0, min(100.0, score))
 
 
 
@@ -488,13 +505,14 @@ async def grammar_score(text: str) -> int:
         if sentence.correct() != sentence:
             errors += 1
 
-    # Determine the score based on the number of errors
-    if errors == 0:
-        return 100  # BEST SCORE
-    elif errors <= 2:
-        return 50   # AVERAGE SCORE
-    else:
-        return 0    # WORST SCORE
+    print(" \n\n Number of grammatical errors: " , errors )
+
+    errors *= 5
+
+    result = 100 - errors
+
+    return max( 0 , result)
+
 
 async def vocabulary_score(text: str) -> float:
     # Create a TextBlob object
@@ -516,26 +534,9 @@ async def vocabulary_score(text: str) -> float:
     percentage_correct = min( percentage_correct , 100)
     percentage_correct = max( 0 , percentage_correct )
 
+    percentage_correct = round( percentage_correct , 2 )
+
     return percentage_correct
-
-
-
-async def content_score( essay: str, summarization : str ):
-    essay_embedding = content_relevance_model.encode( essay )
-
-    summarization_embedding = content_relevance_model.encode( summarization )
-
-    relevance_score = float(util.dot_score( essay_embedding, summarization_embedding).cpu()[0][0]) * 100
-
-    if(relevance_score >= 40):
-        relevance_score = relevance_score + 30
-
-    relevance_score = min( relevance_score , 100 )
-
-    relevance_score = max( 0 , relevance_score )
-
-    return relevance_score
-
 
 
 @app.post("/summarization_scoring/")
@@ -543,7 +544,7 @@ async def summarization_score( essay : str = Form() , summarization : str = Form
 
     content_score_result, form_score_result, grammar_score_result, vocabulary_score_result = await asyncio.gather(
         content_score(essay, summarization),
-        form_score(summarization),
+        form_score_summary(summarization),
         grammar_score(summarization),
         vocabulary_score(summarization)
     )
@@ -555,5 +556,238 @@ async def summarization_score( essay : str = Form() , summarization : str = Form
         "Form Score: " : form_score_result,
         "Grammar Score: " : grammar_score_result,
         "Vocabulary Score: " : vocabulary_score_result,
-        "Summarization Score: " : (content_score_result + form_score_result + grammar_score_result + vocabulary_score_result) / 4
+        "Overall Summarization Score: " : round( (content_score_result + form_score_result + grammar_score_result + vocabulary_score_result) / 4 , 2)
+    }
+
+
+
+'''
+transitional words can significantly contribute to the development, structure, and coherence of a text.
+
+    Development: Transitional words help to show how ideas build upon each other and progress
+        throughout the essay. They can introduce new points, provide examples, or signal a shift in focus.
+
+    Structure: Transitional words help to organize the text by indicating relationships between
+        ideas. They can show cause and effect, compare and contrast, or signal a sequence of events.
+
+    Coherence: Transitional words help to create a smooth flow between sentences and paragraphs,
+        making the text easier to understand and follow. They can clarify connections between
+        ideas and prevent the text from feeling disjointed.
+'''
+
+
+addition_transitional_words = [
+    "and", "also", "too", "in addition", "furthermore", "moreover", "besides", "likewise",
+    "similarly", "equally important", "not to mention", "as well as", "what's more",
+    "on top of that", "to boot", "in the same way", "by the same token", "similarly",
+    "likewise", "in a similar vein", "correspondingly", "at the same time", "concurrently",
+    "simultaneously", "not only... but also", "both... and", "as well", "and then",
+    "and so forth", "and so on"
+]
+contrast_transitional_words = [
+    "but", "however", "nevertheless", "nonetheless", "on the other hand", "on the contrary",
+    "in contrast", "conversely", "although", "though", "even though", "despite", "in spite of",
+    "regardless of", "while", "whereas", "yet", "still", "even so", "even if", "at the same time",
+    "by the same token", "equally", "in common", "similarly", "just like", "just as", "as well as",
+    "resemble", "equally", "in common", "by the same token"
+]
+cause_effect_transitional_words = [
+    "because", "since", "as", "due to", "owing to", "thanks to", "on account of",
+    "as a result", "consequently", "therefore", "hence", "thus", "so", "accordingly",
+    "for this reason", "as a consequence", "in consequence", "in that case",
+    "that being the case", "for that reason", "as a result of", "because of",
+    "on account of", "owing to", "due to", "thanks to"
+]
+time_transitional_words = [
+    "first", "second", "third", "next", "then", "after", "before", "later", "earlier",
+    "previously", "subsequently", "following", "meanwhile", "simultaneously",
+    "at the same time", "concurrently", "in the meantime", "in the interim", "afterwards",
+    "thereafter", "finally", "lastly", "ultimately", "in conclusion", "to conclude",
+    "in summary", "to sum up"
+]
+emphasis_transitional_words = [
+    "indeed", "in fact", "certainly", "assuredly", "without a doubt", "undoubtedly",
+    "unquestionably", "undeniably", "absolutely", "positively", "emphatically",
+    "decisively", "strongly", "forcefully", "with conviction", "with certainty",
+    "with assurance", "without hesitation", "without question", "without fail", "without doubt"
+]
+example_transitional_words = [
+    "for example", "for instance", "such as", "like", "as an illustration", "to illustrate",
+    "to demonstrate", "to exemplify", "namely", "specifically", "in particular",
+    "particularly", "especially"
+]
+conclusion_transitional_words = [
+    "in conclusion", "to conclude", "in summary", "to sum up", "finally", "lastly",
+    "ultimately", "therefore", "hence", "thus", "so", "accordingly", "as a result",
+    "consequently"
+]
+transition_between_sections_transitional_words = [
+    "in the following section", "moving on to", "now", "let's explore",
+    "turning our attention to", "to delve deeper", "we will now examine",
+    "next", "at this point", "at this juncture", "furthermore", "moreover",
+    "in addition"
+]
+miscellaneous_transition_words_list = [
+    # Clarification
+    "in other words", "that is to say", "namely", "to put it another way",
+    "in simpler terms", "to clarify", "to explain further", "to elaborate",
+    "to be more specific", "to be more exact",
+
+    # Concession
+    "admittedly", "granted", "of course", "naturally", "it is true that",
+    "it must be admitted that", "it cannot be denied that", "it goes without saying that",
+
+    # Digression
+    "by the way", "incidentally", "aside from that", "apart from that",
+
+    # Repetition
+    "again", "once again", "still", "further", "furthermore", "moreover", "in addition"
+]
+contrast_within_sentence_transitional_words = [
+    "but", "however", "nevertheless", "nonetheless", "on the other hand",
+    "in contrast", "conversely", "although", "though", "even though",
+    "despite", "in spite of", "regardless of", "while", "whereas",
+    "yet", "still", "even so", "even if"
+]
+comparison_transitional_words = [
+    "similarly", "likewise", "in the same way", "equally", "in common",
+    "by the same token", "just like", "just as", "as well as", "resemble"
+]
+cause_and_effect_within_sentence_transitional_words = [
+    "because", "since", "as", "due to", "owing to", "thanks to",
+    "on account of", "as a result", "consequently", "therefore",
+    "hence", "thus", "so", "accordingly", "for this reason",
+    "as a consequence", "in consequence", "in that case",
+    "that being the case", "for that reason", "as a result of",
+    "because of", "on account of", "owing to", "due to", "thanks to"
+]
+emphasis_within_sentence_transitional_words = [
+    "indeed", "in fact", "certainly", "assuredly", "without a doubt",
+    "undoubtedly", "unquestionably", "undeniably", "absolutely",
+    "positively", "emphatically", "decisively", "strongly", "forcefully",
+    "with conviction", "with certainty", "with assurance",
+    "without hesitation", "without question", "without fail", "without doubt"
+]
+concession_digression_repetition_transitional_words = [
+    # Concession
+    "admittedly", "granted", "of course", "naturally",
+    "it is true that", "it must be admitted that",
+    "it cannot be denied that", "it goes without saying that",
+
+    # Digression
+    "by the way", "incidentally", "aside from that",
+    "apart from that",
+
+    # Repetition
+    "again", "once again", "still", "further",
+    "furthermore", "moreover", "in addition"
+]
+
+async def dsc_score( essay: str ):
+    # Normalize the essay
+    essay_lower = essay.lower()
+
+    # Helper function to count occurrences of transitional words
+    def count_transitional_words(word_list):
+        return sum(essay_lower.count(word) for word in word_list)
+
+    # Calculate counts for each type of transitional word list
+    addition_count = count_transitional_words(addition_transitional_words)
+    contrast_count = count_transitional_words(contrast_transitional_words)
+    cause_effect_count = count_transitional_words(cause_effect_transitional_words)
+    time_count = count_transitional_words(time_transitional_words)
+    emphasis_count = count_transitional_words(emphasis_transitional_words)
+    example_count = count_transitional_words(example_transitional_words)
+    conclusion_count = count_transitional_words(conclusion_transitional_words)
+    transition_between_sections_count = count_transitional_words(transition_between_sections_transitional_words)
+    misc_count = count_transitional_words(miscellaneous_transition_words_list)
+    contrast_within_sentence_count = count_transitional_words(contrast_within_sentence_transitional_words)
+    comparison_count = count_transitional_words(comparison_transitional_words)
+    cause_and_effect_within_sentence_count = count_transitional_words(cause_and_effect_within_sentence_transitional_words)
+    emphasis_within_sentence_count = count_transitional_words(emphasis_within_sentence_transitional_words)
+    concession_digression_repetition_count = count_transitional_words(concession_digression_repetition_transitional_words)
+
+    # Calculate total transitional word count
+    total_transitional_count = (
+        addition_count + contrast_count + cause_effect_count + time_count +
+        emphasis_count + example_count + conclusion_count +
+        transition_between_sections_count + misc_count +
+        contrast_within_sentence_count + comparison_count +
+        cause_and_effect_within_sentence_count + emphasis_within_sentence_count +
+        concession_digression_repetition_count
+    )
+
+    print("\n\n\n Total Transitional Words Count: " , total_transitional_count )
+
+    words = essay.split()
+    word_count = len(words)
+
+    transitional_words_percentage = round( (  total_transitional_count / ( word_count * 1.00)  ) * 100  , 2 )
+
+    print("]n\n\n transitional_words_percentage: " , transitional_words_percentage)
+
+    '''
+    Since a transition_words_percentage of 10% is considered as the ideal percentage of transitional words in an essay,
+    we are deducting points with respect to how much is it deviating from its ideal percentage value.
+
+    This have proven to be powerful to determine the Development, Structure and Coherence in essays
+
+    '''
+    return 100 - abs( transitional_words_percentage - 10 )
+
+
+def is_capitalized(text: str) -> bool:
+    """Check if the entire text is in capital letters."""
+    return text.isupper()
+
+def contains_punctuation(text: str) -> bool:
+    """Check if the text contains any punctuation."""
+    return bool(re.search(r'[.,!?;:]', text))
+
+def is_bullet_points(text: str) -> bool:
+    """Check if the text consists only of bullet points or very short sentences."""
+    sentences = text.split('\n')
+    bullet_points = any(line.strip().startswith('-') for line in sentences)
+    short_sentences = sum(len(sentence.split()) <= 2 for sentence in sentences if sentence.strip())
+    return bullet_points or short_sentences > len(sentences) / 2
+
+
+async def form_score_essay(essay: str) -> float:
+    # REMOVE PUNCTUATION AND COUNT WORDS
+    word_count = len(re.findall(r'\b\w+\b', essay))
+
+    # CHECK ESSAY FORMAT
+    is_capital = is_capitalized(essay)
+    has_punctuation = contains_punctuation(essay)
+    bullet_points_or_short = is_bullet_points(essay)
+
+    # CALCULATE SCORE
+    if 200 <= word_count <= 300 and has_punctuation and not is_capital and not bullet_points_or_short:
+        score = 100.0  # BEST SCORE
+    elif (120 <= word_count <= 199 or 301 <= word_count <= 380) and has_punctuation and not is_capital and not bullet_points_or_short:
+        score = 50.0  # AVERAGE SCORE
+    else:
+        score = 0.0  # WORST SCORE
+
+    return score
+
+
+@app.post("/essay_scoring/")
+async def essay_score( prompt : str = Form() , essay : str = Form() ):
+    content_score_result, form_score_result, dsc_score_result, grammar_score_result = await asyncio.gather(
+        content_score( prompt , essay ),
+        form_score_essay( essay ),
+        dsc_score( essay ),
+        grammar_score( essay )
+    )
+
+    print( essay )
+
+    return {
+
+        "Content Score: " : content_score_result,
+        "Form Score: " : form_score_result,
+        "DSC Score: " : dsc_score_result,
+        "Grammar Score: " : grammar_score_result,
+        "Overall Essay Score" : ( content_score_result + form_score_result + dsc_score_result + grammar_score_result) / 4.0
     }
