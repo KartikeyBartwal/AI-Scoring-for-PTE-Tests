@@ -86,11 +86,15 @@ class DistilBertForRegression(DistilBertPreTrainedModel):
 
 ''''''''''''''' Loading the Pronunciation Model and Tokenizer '''''''''
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
 print("Downloading  pronunciation tokenizer...")
 pronunciation_tokenizer = Wav2Vec2Tokenizer.from_pretrained("facebook/wav2vec2-base-960h")
 print("Downloading  pronunciation model...")
 pronunciation_model = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-base-960h")
 
+pronunciation_model.to(device)
 
 ''''''''''''''''''' Loading the Fluency Model and Tokenizer '''''''''''''
 
@@ -100,12 +104,16 @@ print("Downloading fluency model...")
 fluency_model = DistilBertForRegression.from_pretrained("Kartikeyssj2/Fluency_Scoring_V2")
 print("Download completed.")
 
+fluency_model.to(device)
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-device = "cpu"
+# Determine the device to use (GPU if available, otherwise CPU)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-pronunciation_model.to(device)
-fluency_model.to(device)
+# Move the models to the appropriate device
+# pronunciation_model.to(device)
+# fluency_model.to(device)
+
 
 ''''''''''''''''''''' LOADING THE BIASING MODELS '''''''''''''''
 
@@ -134,6 +142,7 @@ import torch
 
 
 ''''''''''''''''''''''' IMAGE CAPTIONING MODEL '''''''''''''''''
+
 image_captioning_processor = BlipProcessor.from_pretrained("noamrot/FuseCap")
 
 image_captioning_model = BlipForConditionalGeneration.from_pretrained("noamrot/FuseCap").to(device)
@@ -343,7 +352,7 @@ def Get_Captions(context: str , image_captioning_model, image_file):
 
     context = "Describe this image, "
     # Prepare the inputs
-    inputs = image_captioning_processor(raw_image, context, return_tensors="pt").to(device)
+    inputs = image_captioning_processor(raw_image, context, return_tensors="pt")
 
     print("Generating the output ")
 
@@ -382,37 +391,24 @@ async def image_description_scoring( context : str = Form() ,  audio_file: Uploa
     # Clean up the temporary file
     os.remove(temp_file_path)
 
-    ''''''''''''''''''' GET THE PRONUNCIATION AND FLUENCY SCORING '''''''''''''
-    result = get_pronunciation_and_fluency_scores(transcription)
+    image_captions = Get_Captions( context , image_captioning_model , image_file)
 
-    print("*" * 50)
+    result, relevance_scores, incorrect_words_percentage = await asyncio.gather(
 
-    print("transcription:" , transcription)
+            get_pronunciation_and_fluency_scores(transcription),
+            content_score( image_captions , transcription),
+            count_misspelled_words(transcription)
 
-    print("*" * 50)
-
-    ''''''''''''''''''' GET THE CONTENT AND RELEVANCE SCORING WITH RESPECT TO THE IMAGE '''''''''''''
-
-
-    image_caption = Get_Captions( context , image_captioning_model , image_file)
-
-    image_caption_embedding = content_relevance_model.encode( image_caption )
-
-    transcription_text_embeddings = content_relevance_model.encode( transcription )
-
-    image_description_score = float(util.dot_score(image_caption_embedding, transcription_text_embeddings).cpu()[0][0]) * 100
-
+    )
 
     ''''''''''''''''''' PASS THE RAW OUTPUTS TO THE BIASING MODEL '''''''''''''
 
     base_pronunciation_score = result["pronunciation_score"]
     base_fluency_score = result["fluency_score"]
-    incorrect_words_percentage = count_misspelled_words(transcription)
 
     base_pronunciation_score = float(base_pronunciation_score)
     base_fluency_score = float(base_fluency_score)
     incorrect_words_percentage = float(incorrect_words_percentage)
-
 
     print("Base Pronunciation Score:", base_pronunciation_score)
     print("Base fluency Score:", base_fluency_score)
@@ -421,7 +417,14 @@ async def image_description_scoring( context : str = Form() ,  audio_file: Uploa
     final_pronunciation_score = max(0, min(100, linreg_pronunciation.predict(np.array([[base_pronunciation_score, base_fluency_score, incorrect_words_percentage]]))[0]))
     final_fluency_score = max(0, min(100, linreg_fluency.predict(np.array([[base_pronunciation_score, base_fluency_score, incorrect_words_percentage]]))[0]))
 
-    result["Content Quality and Relevance Score"] = image_description_score
+    print("Base Pronunciation Score:", base_pronunciation_score)
+    print("Base fluency Score:", base_fluency_score)
+    print("Incorrect Words Percentage:", incorrect_words_percentage)
+
+    final_pronunciation_score = max(0, min(100, linreg_pronunciation.predict(np.array([[base_pronunciation_score, base_fluency_score, incorrect_words_percentage]]))[0]))
+    final_fluency_score = max(0, min(100, linreg_fluency.predict(np.array([[base_pronunciation_score, base_fluency_score, incorrect_words_percentage]]))[0]))
+
+    result["Content Quality and Relevance Score"] = relevance_scores
     result["pronunciation_score"] = final_pronunciation_score
     result["fluency_score"] = final_fluency_score
 
