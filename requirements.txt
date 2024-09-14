@@ -1,6 +1,6 @@
-uvicorn
+git+https://github.com/openai/whisper.git
+whisper
 fastapi
 pydantic
-aiofiles
-patool
-pydub
+uvicorn
+python-multipart
