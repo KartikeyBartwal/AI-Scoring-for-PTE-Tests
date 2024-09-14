@@ -1,6 +1,6 @@
-git+https://github.com/openai/whisper.git
 whisper
 fastapi
 pydantic
 uvicorn
 python-multipart
+gunicorn
