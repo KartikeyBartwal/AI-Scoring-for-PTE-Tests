@@ -5,3 +5,8 @@ pydantic
 uvicorn
 python-multipart
 gunicorn
+gensim
+scikit-learn
+numpy
+textblob
+nltk
